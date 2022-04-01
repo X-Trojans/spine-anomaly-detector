@@ -6,6 +6,8 @@ import torch
 import pickle
 from PIL import Image
 from tqdm import tqdm
+import torch
+torch.multiprocessing.set_sharing_strategy('file_system')
 from torch.optim import AdamW
 from torch.utils import data
 import torchvision
@@ -274,7 +276,7 @@ def evaluate_average_precision(model,loader):
         model.eval()
         with torch.set_grad_enabled(False):
             preds = model.forward(images_device)
-            metric.update(preds,targets)
+            metric.update(preds,targets_device)
     mAP =  metric.compute()
     print(mAP)
     return mAP
