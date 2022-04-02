@@ -204,7 +204,7 @@ class LossHistory:
         self.loss['classifier_loss'].append(classifier_loss)
         self.loss['box_reg_loss'].append(box_reg_loss)
         self.loss['objectness_loss'].append(objectness_loss)
-        self.loss['rpn_box_reg_loss'].append(objectness_loss)
+        self.loss['rpn_box_reg_loss'].append(rpn_box_reg_loss)
         
     def save(self):
         save_object(self.path,self.file_name,self.loss)
@@ -372,11 +372,11 @@ test_loader  = data.DataLoader(test_dataset , batch_size=batch_size, shuffle=Tru
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = create_faster_rcnn_model(num_classes=8,trainable_backbone_layers=3).to(device)
+model = create_faster_rcnn_model(num_classes=8,trainable_backbone_layers=5).to(device)
 optim = AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-3)
 best_model = SaveBestModel("model_object.pt",path)
 
-epochs = 120
+epochs = 10
 model, train_history,valid_history, mAP_history = train_model(model, best_model, train_loader,valid_loader, optim, epochs, path=path,evaluate_map_every=1)
 
 results = evaluate_average_precision(model,test_loader)
