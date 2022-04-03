@@ -82,7 +82,7 @@ class SpineObjectDetection(data.Dataset):
             labels.append(self.anomaly_map[label])
             
             if box[0]==-1 and box[1]==-1:
-                boxes.append([0,0,transformed_w,transformed_h])
+                boxes.append([0,0,1,1])
             else:
                 boxes.append([
                     (box[0]/image_width)*transformed_w,
@@ -186,6 +186,22 @@ class SaveBestModel:
             
     def fetch(self):
         return torch.load(os.path.join(self.path,self.model_name))
+        
+        
+class SaveBestModelMAP:
+    def __init__(self, model_name, path="/"):
+        self.best_mAP = float('-inf')
+        self.path = path
+        self.model_name = model_name
+        
+    def update(self, model, current_mAP):
+        if current_mAP > self.best_mAP:
+            self.best_mAP = current_mAP
+            torch.save(model, os.path.join(self.path,self.model_name))
+            print(f"Saved Model. Best mAP: {self.best_mAP}")
+            
+    def fetch(self):
+        return torch.load(os.path.join(self.path,self.model_name))
     
 class LossHistory:
     def __init__(self,path,file_name):
@@ -222,7 +238,7 @@ def train_one_epoch(model,train_loader,optim):
         model.train()
         with torch.set_grad_enabled(True):
             loss_dict = model.forward(images_device,targets_device)
-            loss = loss_dict['loss_classifier']  + loss_dict['loss_box_reg'] + (loss_dict['loss_objectness']  + loss_dict['loss_rpn_box_reg']) * 10
+            loss = loss_dict['loss_classifier']  + loss_dict['loss_box_reg'] + loss_dict['loss_objectness']  + loss_dict['loss_rpn_box_reg']
             loss.backward()
             optim.step()
 
@@ -247,10 +263,11 @@ def evaluate_loss(model,loader):
     for images, targets in tqdm(loader, disable=DISABLE_TQDM):
         images_device = list(image.to(device) for image in images)
         targets_device = [{k: v.to(device) for k, v in t.items()} for t in targets]
+        optim.zero_grad()
         model.train()
         with torch.set_grad_enabled(False):
             loss_dict = model.forward(images_device,targets_device)
-            loss = loss_dict['loss_classifier']  + loss_dict['loss_box_reg'] + (loss_dict['loss_objectness']  + loss_dict['loss_rpn_box_reg']) * 10
+            loss = loss_dict['loss_classifier']  + loss_dict['loss_box_reg'] + loss_dict['loss_objectness']  + loss_dict['loss_rpn_box_reg']
 
         running_total_loss += loss.item()
         running_loss_classifier +=loss_dict['loss_classifier'].item()
@@ -283,10 +300,11 @@ def evaluate_average_precision(model,loader):
 
 
 
-def train_model(model, best_model, train_loader,valid_loader, optim, epochs, path=".",evaluate_map_every=5):
+def train_model(model, best_model,best_model_map, train_loader,valid_loader, optim, epochs, path=".",evaluate_map_every=5):
     train_history = LossHistory(path, "train_history")
     valid_history = LossHistory(path, "valid_history")
     mAP_history = []
+    mAP50_history = []
     for i in range(1, epochs+1):
         start = time.time()
         print(f"\nEpoch {i}:")
@@ -308,10 +326,15 @@ def train_model(model, best_model, train_loader,valid_loader, optim, epochs, pat
         if i%evaluate_map_every ==0:
             mAP = evaluate_average_precision(model,valid_loader)
             mAP_history.append(mAP)
+            mAP_50 = torch.mean(mAP["map_per_class"][1:]).item()
+            print("MAP@0.5 :", mAP_50)
+            mAP50_history.append(mAP_50)
+            best_model_map.update(model,mAP_50)
             
         train_history.save(),
         valid_history.save()
         save_object(path,"map_history", mAP_history)
+        save_object(path,"map_history_50", mAP50_history)
         print("\n Time Elapsed Per Epoch: ", time.time() - start)
     return best_model.fetch(),train_history,valid_history,mAP_history
 
@@ -363,18 +386,19 @@ valid_dataset = SpineObjectDetection(valid, valid_annotation_map,anomaly_map,ima
 test_dataset = SpineObjectDetection(test, test_annotation_map,anomaly_map,image_id_map,test_transform)
 
 
-batch_size = 12
+batch_size = 10
 train_loader = data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn,num_workers=8)
 valid_loader = data.DataLoader(valid_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn,num_workers=8)
 test_loader  = data.DataLoader(test_dataset , batch_size=batch_size, shuffle=True, collate_fn=collate_fn,num_workers=8)
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = create_faster_rcnn_model(num_classes=9,trainable_backbone_layers=3).to(device)
+model = create_faster_rcnn_model(num_classes=8,trainable_backbone_layers=5).to(device)
 optim = AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-5)
 best_model = SaveBestModel("model_object.pt",path)
+best_model_map = SaveBestModelMAP("model_object_map.pt",path)
 
 epochs = 50
-model, train_history,valid_history, mAP_history = train_model(model, best_model, train_loader,valid_loader, optim, epochs, path=path,evaluate_map_every=1)
+model, train_history,valid_history, mAP_history = train_model(model, best_model,best_model_map, train_loader,valid_loader, optim, epochs, path=path,evaluate_map_every=1)
 
 results = evaluate_average_precision(model,test_loader)
