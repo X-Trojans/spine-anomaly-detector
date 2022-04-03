@@ -222,7 +222,7 @@ def train_one_epoch(model,train_loader,optim):
         model.train()
         with torch.set_grad_enabled(True):
             loss_dict = model.forward(images_device,targets_device)
-            loss = sum(loss for loss in loss_dict.values())
+            loss = loss_dict['loss_classifier']  + loss_dict['loss_box_reg'] + (loss_dict['loss_objectness']  + loss_dict['loss_rpn_box_reg']) * 10
             loss.backward()
             optim.step()
 
@@ -250,7 +250,7 @@ def evaluate_loss(model,loader):
         model.train()
         with torch.set_grad_enabled(False):
             loss_dict = model.forward(images_device,targets_device)
-            loss = sum(loss for loss in loss_dict.values())
+            loss = loss_dict['loss_classifier']  + loss_dict['loss_box_reg'] + (loss_dict['loss_objectness']  + loss_dict['loss_rpn_box_reg']) * 10
 
         running_total_loss += loss.item()
         running_loss_classifier +=loss_dict['loss_classifier'].item()
@@ -332,7 +332,6 @@ anomaly_map = {
     'Other lesions': 7,
  }
 
-
 train, valid, test = train_test_split(path)
 
 train_annotations = pd.read_csv(annot_path + "train.csv")
@@ -364,19 +363,18 @@ valid_dataset = SpineObjectDetection(valid, valid_annotation_map,anomaly_map,ima
 test_dataset = SpineObjectDetection(test, test_annotation_map,anomaly_map,image_id_map,test_transform)
 
 
-batch_size = 16
-
+batch_size = 12
 train_loader = data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn,num_workers=8)
 valid_loader = data.DataLoader(valid_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn,num_workers=8)
 test_loader  = data.DataLoader(test_dataset , batch_size=batch_size, shuffle=True, collate_fn=collate_fn,num_workers=8)
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = create_faster_rcnn_model(num_classes=8,trainable_backbone_layers=5).to(device)
-optim = AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-3)
+model = create_faster_rcnn_model(num_classes=9,trainable_backbone_layers=3).to(device)
+optim = AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-5)
 best_model = SaveBestModel("model_object.pt",path)
 
-epochs = 10
+epochs = 50
 model, train_history,valid_history, mAP_history = train_model(model, best_model, train_loader,valid_loader, optim, epochs, path=path,evaluate_map_every=1)
 
 results = evaluate_average_precision(model,test_loader)
