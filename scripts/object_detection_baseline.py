@@ -1,3 +1,4 @@
+from policy import Policy
 import numpy as np
 import os
 import pandas as pd
@@ -97,7 +98,13 @@ class SpineObjectDetection(data.Dataset):
         boxes = torch.as_tensor(boxes, dtype=torch.float32)
         area = torch.as_tensor(area, dtype=torch.float32)       
         
-        image,boxes = self.transform(image,boxes)
+        image_new,boxes_new = self.transform(image,boxes)
+        area = (boxes_new[:,2] - boxes_new[:,0])*(boxes_new[:,3] - boxes_new[:,1])
+                                          
+        if (area>0).sum() == area.shape[0]:
+            image,boxes = image_new,boxes_new 
+        else:
+            image, boxes = ToTensor()(image, boxes)
         
         target = {}
         target["boxes"] = boxes
@@ -373,13 +380,13 @@ all_image_ids = [image.split('/')[-1].split('.')[0] for image in train]\
 image_id_map = { img_id:i+1 for i,img_id in enumerate(all_image_ids)}
 
 
-train_transform = Compose([
-    RandomHorizontalFlip(p=0.5),
-    ToTensor()
-])
+train_transform = Policy('policy_v1',pre_transform=[], post_transform=[ToTensor()])
+
 test_transform = Compose([
     ToTensor()
 ])
+
+
 
 train_dataset = SpineObjectDetection(train, train_annotation_map,anomaly_map,image_id_map,train_transform)
 valid_dataset = SpineObjectDetection(valid, valid_annotation_map,anomaly_map,image_id_map,train_transform)
@@ -392,6 +399,9 @@ valid_loader = data.DataLoader(valid_dataset, batch_size=batch_size, shuffle=Tru
 test_loader  = data.DataLoader(test_dataset , batch_size=batch_size, shuffle=True, collate_fn=collate_fn,num_workers=8)
 
 
+
+
+path = '/scratch2/knarasim/models/object_detection_auto_augment3/'
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = create_faster_rcnn_model(num_classes=8,trainable_backbone_layers=5).to(device)
 optim = AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-5)
