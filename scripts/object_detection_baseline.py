@@ -1,34 +1,38 @@
-import numpy as np, pandas as pd
-import os, random, pickle, time
+# from policy import Policy
+import numpy as np
+import os
+import pandas as pd
+import random
+import torch
+import pickle
 from PIL import Image
 from tqdm import tqdm
+import torch
 
-import torch, torchvision
+torch.multiprocessing.set_sharing_strategy("file_system")
 from torch.optim import AdamW
 from torch.utils import data
+import torchvision
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from torchvision.utils import draw_bounding_boxes
 from torchmetrics.detection import MeanAveragePrecision
 import torchvision.transforms.functional as F
+import time
 
-DISABLE_TQDM = False
+
+DISABLE_TQDM = True
 torch.manual_seed(42)
-torch.multiprocessing.set_sharing_strategy("file_system")
 
 
 def train_test_split(path):
-
     train_path = path + "train_images/"
     train_list = [os.path.join(train_path, img) for img in os.listdir(train_path)]
-
     random.shuffle(train_list)
     threshold = int(0.8 * len(train_list))
     valid_list = train_list[threshold:]
     train_list = train_list[:threshold]
-
     test_path = path + "test_images/"
     test_list = [os.path.join(test_path, img) for img in os.listdir(test_path)]
-
     return train_list, valid_list, test_list
 
 
@@ -91,7 +95,7 @@ class SpineObjectDetection(data.Dataset):
             labels.append(self.anomaly_map[label])
 
             if box[0] == -1 and box[1] == -1:
-                boxes.append([0, 0, transformed_w, transformed_h])
+                boxes.append([0, 0, 1, 1])
             else:
                 boxes.append(
                     [
@@ -108,7 +112,13 @@ class SpineObjectDetection(data.Dataset):
         boxes = torch.as_tensor(boxes, dtype=torch.float32)
         area = torch.as_tensor(area, dtype=torch.float32)
 
-        image, boxes = self.transform(image, boxes)
+        image_new, boxes_new = self.transform(image, boxes)
+        area = (boxes_new[:, 2] - boxes_new[:, 0]) * (boxes_new[:, 3] - boxes_new[:, 1])
+
+        if (area > 0).sum() == area.shape[0]:
+            image, boxes = image_new, boxes_new
+        else:
+            image, boxes = ToTensor()(image, boxes)
 
         target = {}
         target["boxes"] = boxes
@@ -173,6 +183,18 @@ def collate_fn(batch):
     return tuple(zip(*batch))
 
 
+def create_faster_rcnn_model(num_classes, trainable_backbone_layers=3):
+    model = torchvision.models.detection.fasterrcnn_resnet50_fpn(
+        pretrained=True,
+        trainable_backbone_layers=trainable_backbone_layers,
+        min_size=640,
+        max_size=2699,
+    )
+    in_features = model.roi_heads.box_predictor.cls_score.in_features
+    model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
+    return model
+
+
 def save_object(path, file_name, obj):
     with open(os.path.join(path, file_name + ".pickle"), "wb") as file:
         pickle.dump(obj, file, protocol=pickle.HIGHEST_PROTOCOL)
@@ -194,6 +216,22 @@ class SaveBestModel:
             self.best_valid_loss = current_valid_loss
             torch.save(model, os.path.join(self.path, self.model_name))
             print(f"Saved Model. Best validation loss: {self.best_valid_loss}")
+
+    def fetch(self):
+        return torch.load(os.path.join(self.path, self.model_name))
+
+
+class SaveBestModelMAP:
+    def __init__(self, model_name, path="/"):
+        self.best_mAP = float("-inf")
+        self.path = path
+        self.model_name = model_name
+
+    def update(self, model, current_mAP):
+        if current_mAP > self.best_mAP:
+            self.best_mAP = current_mAP
+            torch.save(model, os.path.join(self.path, self.model_name))
+            print(f"Saved Model. Best mAP: {self.best_mAP}")
 
     def fetch(self):
         return torch.load(os.path.join(self.path, self.model_name))
@@ -225,10 +263,6 @@ class LossHistory:
         self.loss = load_object(self.path, self.file_name)
 
 
-def create_faster_rcnn_model():
-    pass
-
-
 def train_one_epoch(model, train_loader, optim):
     (
         running_total_loss,
@@ -244,7 +278,12 @@ def train_one_epoch(model, train_loader, optim):
         model.train()
         with torch.set_grad_enabled(True):
             loss_dict = model.forward(images_device, targets_device)
-            loss = sum(loss for loss in loss_dict.values())
+            loss = (
+                loss_dict["loss_classifier"]
+                + loss_dict["loss_box_reg"]
+                + loss_dict["loss_objectness"]
+                + loss_dict["loss_rpn_box_reg"]
+            )
             loss.backward()
             optim.step()
 
@@ -288,10 +327,16 @@ def evaluate_loss(model, loader):
     for images, targets in tqdm(loader, disable=DISABLE_TQDM):
         images_device = list(image.to(device) for image in images)
         targets_device = [{k: v.to(device) for k, v in t.items()} for t in targets]
+        optim.zero_grad()
         model.train()
         with torch.set_grad_enabled(False):
             loss_dict = model.forward(images_device, targets_device)
-            loss = sum(loss for loss in loss_dict.values())
+            loss = (
+                loss_dict["loss_classifier"]
+                + loss_dict["loss_box_reg"]
+                + loss_dict["loss_objectness"]
+                + loss_dict["loss_rpn_box_reg"]
+            )
 
         running_total_loss += loss.item()
         running_loss_classifier += loss_dict["loss_classifier"].item()
@@ -338,11 +383,20 @@ def evaluate_average_precision(model, loader):
 
 
 def train_model(
-    model, best_model, train_loader, valid_loader, optim, epochs, path=".", evaluate_map_every=5
+    model,
+    best_model,
+    best_model_map,
+    train_loader,
+    valid_loader,
+    optim,
+    epochs,
+    path=".",
+    evaluate_map_every=5,
 ):
     train_history = LossHistory(path, "train_history")
     valid_history = LossHistory(path, "valid_history")
     mAP_history = []
+    mAP50_history = []
     for i in range(1, epochs + 1):
         start = time.time()
         print(f"\nEpoch {i}:")
@@ -380,15 +434,20 @@ def train_model(
         if i % evaluate_map_every == 0:
             mAP = evaluate_average_precision(model, valid_loader)
             mAP_history.append(mAP)
+            mAP_50 = torch.mean(mAP["map_per_class"][1:]).item()
+            print("MAP@0.5 :", mAP_50)
+            mAP50_history.append(mAP_50)
+            best_model_map.update(model, mAP_50)
 
         train_history.save(),
         valid_history.save()
         save_object(path, "map_history", mAP_history)
+        save_object(path, "map_history_50", mAP50_history)
         print("\n Time Elapsed Per Epoch: ", time.time() - start)
     return best_model.fetch(), train_history, valid_history, mAP_history
 
 
-path = "/data/avramidi/tiny_vindr/"
+path = "/scratch1/knarasim/physionet.org/files/vindr-spinexr/tiny_vindr/"
 train_path = path + "train_images/"
 test_path = path + "test_images/"
 annot_path = path + "annotations/"
@@ -403,7 +462,6 @@ anomaly_map = {
     "Vertebral collapse": 6,
     "Other lesions": 7,
 }
-
 
 train, valid, test = train_test_split(path)
 
@@ -427,8 +485,10 @@ all_image_ids = (
 image_id_map = {img_id: i + 1 for i, img_id in enumerate(all_image_ids)}
 
 
-train_transform = Compose([RandomHorizontalFlip(p=0.5), ToTensor()])
+train_transform = Policy("policy_v1", pre_transform=[], post_transform=[ToTensor()])
+
 test_transform = Compose([ToTensor()])
+
 
 train_dataset = SpineObjectDetection(
     train, train_annotation_map, anomaly_map, image_id_map, train_transform
@@ -441,8 +501,7 @@ test_dataset = SpineObjectDetection(
 )
 
 
-batch_size = 4
-
+batch_size = 10
 train_loader = data.DataLoader(
     train_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn, num_workers=8
 )
@@ -454,14 +513,24 @@ test_loader = data.DataLoader(
 )
 
 
-device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
-model = create_faster_rcnn_model(num_classes=8, trainable_backbone_layers=3).to(device)
-optim = AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-3)
+path = "/scratch2/knarasim/models/object_detection_auto_augment3/"
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model = create_faster_rcnn_model(num_classes=8, trainable_backbone_layers=5).to(device)
+optim = AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-5)
 best_model = SaveBestModel("model_object.pt", path)
+best_model_map = SaveBestModelMAP("model_object_map.pt", path)
 
-epochs = 1
+epochs = 50
 model, train_history, valid_history, mAP_history = train_model(
-    model, best_model, train_loader, valid_loader, optim, epochs, path=path, evaluate_map_every=1
+    model,
+    best_model,
+    best_model_map,
+    train_loader,
+    valid_loader,
+    optim,
+    epochs,
+    path=path,
+    evaluate_map_every=1,
 )
 
 results = evaluate_average_precision(model, test_loader)
