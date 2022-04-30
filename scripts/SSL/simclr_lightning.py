@@ -1,4 +1,5 @@
 import numpy as np, os
+import math
 import matplotlib.pyplot as plt
 import pandas as pd, random
 import torch, torch.nn as nn
@@ -101,17 +102,19 @@ temperature=0.1
 n_classes=2
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 pretrained_checkpoint = 'https://pl-bolts-weights.s3.us-east-2.amazonaws.com/simclr/bolts_simclr_imagenet/simclr_imagenet.ckpt'
 model = SimCLR(n_classes, pretrained_checkpoint=pretrained_checkpoint,temperature=temperature,weight_decay=weight_decay,lr=learning_rate,max_epochs=n_epochs).to(device)
 
 save_model_path = os.path.join(os.getcwd(), "saved_models/")
 filename='SimCLR_ResNet50_adam_'
 save_name = save_model_path +filename + '.ckpt'
-checkpoint_callback = ModelCheckpoint(filename=filename, dirpath=save_model_path,every_n_epochs=5,
+checkpoint_callback = ModelCheckpoint(filename=filename, dirpath=save_model_path,every_n_epochs=1,
                                         save_last=True, save_top_k=2,monitor='Contrastive loss_epoch',mode='min')
 def train_simclr(model, max_epochs, train_loader,val_loader,pretrained_checkpoint):
     trainer = pl.Trainer(callbacks=[checkpoint_callback],
-                  accelerator='gpu', devices=1,
+                gpus=1 if str(device)=='cuda' else 0,
+                  #accelerator='gpu', devices=1,
                   max_epochs=max_epochs) 
     pl.seed_everything(42)
     trainer.fit(model, train_loader, val_loader)

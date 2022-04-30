@@ -1,4 +1,5 @@
 import numpy as np, os
+import math
 import matplotlib.pyplot as plt
 import pandas as pd, random
 import torch, torch.nn as nn
@@ -44,10 +45,10 @@ class SimCLR(pl.LightningModule):
         self.backbone = simclr_lib.load_from_checkpoint(pretrained_checkpoint,strict=False)
         self.fc = Projection()
         
-    def contrastive_loss(self,data,mode='train'):
-        
-        out = data
-        out_dist = data
+    def contrastive_loss(self,out_1,out_2,mode='train'):
+        eps =1e-6
+        out = torch.cat((out_1,out_2),dim=0)
+        out_dist = out
 
         # cov and sim: [2 * batch_size, 2 * batch_size * world_size]
         # neg: [2 * batch_size]
@@ -55,7 +56,7 @@ class SimCLR(pl.LightningModule):
         sim = torch.exp(cov / self.tou)
         neg = sim.sum(dim=-1)
         # from each row, subtract e^(1/temp) to remove similarity measure for x1.x1
-        row_sub = Tensor(neg.shape).fill_(math.e ** (1 / self.tou)).to(neg.device)
+        row_sub = torch.Tensor(neg.shape).fill_(math.e ** (1 / self.tou)).to(neg.device)
         neg = torch.clamp(neg - row_sub, min=eps)  # clamp for numerical stability
 
         # Positive similarity, pos becomes [2 * batch_size]
@@ -91,9 +92,9 @@ class SimCLR(pl.LightningModule):
         h2 = self.backbone(image2)
         z1 = self.fc(h1)
         z2=self.fc(h2)
-        feat = torch.cat((z1,z2),dim=0)
-        loss = self.contrastive_loss(feat,mode='train')
-        self.log('Contrastive loss', loss, on_step=False, on_epoch=True, prog_bar=False, logger=True)
+        #feat = torch.cat((z1,z2),dim=0)
+        loss = self.contrastive_loss(z1,z2,mode='train')
+        self.log('Contrastive loss', loss, on_step=True, on_epoch=True, prog_bar=False, logger=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -103,7 +104,7 @@ class SimCLR(pl.LightningModule):
         h2 = self.backbone(image2)
         z1 = self.fc(h1)
         z2=self.fc(h2)
-        feat = torch.cat((z1,z2),dim=0)
-        loss = self.contrastive_loss(feat, mode='val')
-        self.log('Contrastive loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        # feat = torch.cat((z1,z2),dim=0)
+        loss = self.contrastive_loss(z1,z2, mode='val')
+        self.log('Contrastive loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         return loss

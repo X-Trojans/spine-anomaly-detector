@@ -5,6 +5,7 @@ import torch, torch.nn as nn
 import torch.nn.functional as F
 from PIL import Image
 from tqdm import tqdm
+from torchmetrics import AUROC
 from torch.optim import SGD, AdamW
 from torch.utils import data
 import pytorch_lightning as pl
@@ -195,7 +196,7 @@ class SSLFineTuner(pl.LightningModule):
         self.learning_rate = learning_rate
         self.nesterov = nesterov
         self.weight_decay = weight_decay
-
+        self.num_classes = num_classes
         self.scheduler_type = scheduler_type
         self.decay_epochs = decay_epochs
         self.gamma = gamma
@@ -289,7 +290,7 @@ backbone = SimCLR.load_from_checkpoint(checkpoint_path, strict=False)
 
 model = SSLFineTuner(backbone.backbone, num_classes=n_classes, learning_rate=learning_rate,weight_decay=weight_decay)
 # train
-trainer =  pl.Trainer(accelerator='gpu', devices=1,
+trainer =  pl.Trainer(gpus=1 if str(device)=='cuda' else 0,
                   max_epochs=n_epochs) 
 trainer.fit(model, train_loader, valid_loader)
 trainer.save_checkpoint(save_name)
