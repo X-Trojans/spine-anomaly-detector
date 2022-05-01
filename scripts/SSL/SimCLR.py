@@ -1,19 +1,9 @@
-import numpy as np, os
-import math
-import matplotlib.pyplot as plt
-import pandas as pd, random
-import torch, torch.nn as nn
+import math, torch, torch.nn as nn
 import torch.nn.functional as F
-from PIL import Image
-from tqdm import tqdm
-from torch.optim import SGD, AdamW
-from torch.utils import data
 import pytorch_lightning as pl
+from torch.optim import AdamW
 from pl_bolts.optimizers.lr_scheduler import LinearWarmupCosineAnnealingLR
-from pytorch_lightning.callbacks import ModelCheckpoint
 from pl_bolts.models.self_supervised import SimCLR as simclr_lib
-from torchvision import transforms, models
-from sklearn.metrics import classification_report
 
 class Projection(nn.Module):
     def __init__(self, input_dim=2048, hidden_dim=2048, output_dim=128):
