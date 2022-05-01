@@ -30,7 +30,7 @@ def train_test_split(path):
     test_list = [os.path.join(test_path, img) for img in os.listdir(test_path)]
     return train_list, valid_list, test_list
     
-path = 'physionet.org/files/vindr-spinexr/tiny_vindr/'
+path = '/data/avramidi/tiny_vindr/'
 train, valid, test = train_test_split(path)
 annotations = pd.read_csv(path + "/annotations/train.csv")
 train_annot = [
@@ -89,7 +89,7 @@ test_transform = transforms.Compose([
 
 
 
-batch_size = 128
+batch_size = 64
 num_workers=8
 n_classes=2
 checkpoint_path = 'saved_models/SimCLR_ResNet50_adam_.ckpt'#'resnet50_backbone_weights.ckpt'
@@ -277,9 +277,9 @@ class SSLFineTuner(pl.LightningModule):
         return [optimizer], [scheduler]
         
 #hyperparams
-n_epochs = 20
+n_epochs = 10
 n_classes=2
-learning_rate = 0.1
+learning_rate = 0.01
 weight_decay = 1e-6
 
 save_model_path = os.path.join(os.getcwd(), "saved_models/")
@@ -295,7 +295,7 @@ trainer =  pl.Trainer(gpus=1 if str(device)=='cuda' else 0,
 trainer.fit(model, train_loader, valid_loader)
 trainer.save_checkpoint(save_name)
 # test
-# trainer.test(datamodule=dm)
+trainer.test(dataloaders=test_loader)
 
 
 
