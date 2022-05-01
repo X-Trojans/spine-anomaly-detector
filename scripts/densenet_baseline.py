@@ -11,9 +11,9 @@ from torchvision import transforms, models
 from sklearn.metrics import classification_report
 
 
-path = '/scratch1/knarasim/physionet.org/files/vindr-spinexr/tiny_vindr/'
+path = "/data/avramidi/tiny_vindr/"
 train_path = path + "train_images/"
-test_path  = path + "test_images/"
+test_path = path + "test_images/"
 annot_path = path + "annotations/"
 
 
@@ -28,24 +28,34 @@ def train_test_split(path):
     test_list = [os.path.join(test_path, img) for img in os.listdir(test_path)]
     return train_list, valid_list, test_list
 
+
 train, valid, test = train_test_split(path)
 annotations = pd.read_csv(annot_path + "train.csv")
 train_annot = [
-    annotations.iloc[idx] for idx, row in enumerate(annotations.iterrows()) \
-        if "{}train_images/{}.jpg".format(path, row[1]["image_id"]) in train
+    annotations.iloc[idx]
+    for idx, row in enumerate(annotations.iterrows())
+    if "{}train_images/{}.jpg".format(path, row[1]["image_id"]) in train
 ]
-train_annot = pd.DataFrame(train_annot).drop_duplicates(subset=["image_id"]).sort_values(by=["image_id"])
+train_annot = (
+    pd.DataFrame(train_annot).drop_duplicates(subset=["image_id"]).sort_values(by=["image_id"])
+)
 valid_annot = [
-    annotations.iloc[idx] for idx, row in enumerate(annotations.iterrows()) \
-        if "{}train_images/{}.jpg".format(path, row[1]["image_id"]) in valid
+    annotations.iloc[idx]
+    for idx, row in enumerate(annotations.iterrows())
+    if "{}train_images/{}.jpg".format(path, row[1]["image_id"]) in valid
 ]
-valid_annot = pd.DataFrame(valid_annot).drop_duplicates(subset=["image_id"]).sort_values(by=["image_id"])
+valid_annot = (
+    pd.DataFrame(valid_annot).drop_duplicates(subset=["image_id"]).sort_values(by=["image_id"])
+)
 annotations = pd.read_csv(annot_path + "test.csv")
 test_annot = [
-    annotations.iloc[idx] for idx, row in enumerate(annotations.iterrows()) \
-        if "{}test_images/{}.jpg".format(path, row[1]["image_id"]) in test
+    annotations.iloc[idx]
+    for idx, row in enumerate(annotations.iterrows())
+    if "{}test_images/{}.jpg".format(path, row[1]["image_id"]) in test
 ]
-test_annot = pd.DataFrame(test_annot).drop_duplicates(subset=["image_id"]).sort_values(by=["image_id"])
+test_annot = (
+    pd.DataFrame(test_annot).drop_duplicates(subset=["image_id"]).sort_values(by=["image_id"])
+)
 
 
 class VinDrSpineXR(data.Dataset):
@@ -54,32 +64,40 @@ class VinDrSpineXR(data.Dataset):
         self.img_paths.sort()
         self.transform = transform
         self.labels = annot_df[["image_id", "lesion_type"]]
+
     def __len__(self):
         return len(self.labels)
+
     def __getitem__(self, idx):
         image = Image.open(self.img_paths[idx])
         #  0: Abnormal  |  1: Normal
         label = self.labels.iloc[idx, 1] == "No finding"
         image = self.transform(image)
-        return image, label*1
-train_transform = transforms.Compose([
-    transforms.Resize((224,224)),
-    transforms.ToTensor(),
-    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-])
-test_transform = transforms.Compose([
-    transforms.Resize((224,224)),
-    transforms.ToTensor(),
-    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-])
+        return image, label * 1
+
+
+train_transform = transforms.Compose(
+    [
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+    ]
+)
+test_transform = transforms.Compose(
+    [
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+    ]
+)
 
 batch_size = 32
 train_dataset = VinDrSpineXR(train, train_annot, train_transform)
 valid_dataset = VinDrSpineXR(valid, valid_annot, train_transform)
-test_dataset  = VinDrSpineXR(test , test_annot , test_transform )
+test_dataset = VinDrSpineXR(test, test_annot, test_transform)
 train_loader = data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 valid_loader = data.DataLoader(valid_dataset, batch_size=batch_size, shuffle=True)
-test_loader  = data.DataLoader(test_dataset , batch_size=batch_size, shuffle=True)
+test_loader = data.DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
 #### Build and Train Network Model
 class XRModel(nn.Module):
     def __init__(self, n_classes, use_pretrained=True, freeze=True):
@@ -92,19 +110,20 @@ class XRModel(nn.Module):
         n_feats = self.base_net.classifier.in_features
         self.base_net.classifier = nn.Linear(n_feats, 256)
         self.cls = nn.Sequential(nn.LeakyReLU(), nn.Linear(256, n_classes))
+
     def forward(self, input):
         return self.cls(self.base_net(input))
 
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:3" if torch.cuda.is_available() else "cpu")
 model = XRModel(n_classes=2, freeze=False).to(device)
 optim = AdamW(model.parameters(), lr=1e-3)
 lossf = nn.CrossEntropyLoss()
-n_epochs = 1 #38 + 12
+n_epochs = 1  # 38 + 12
 
-for i in range(1, n_epochs+1):
+for i in range(1, n_epochs + 1):
     print(f"\nEpoch {i}:")
-    print("-"*10)
+    print("-" * 10)
     running_loss, running_hits = 0.0, 0.0
     for images, labels in tqdm(train_loader):
         images = images.to(device)
@@ -116,15 +135,15 @@ for i in range(1, n_epochs+1):
             _, pred = torch.max(out, 1)
             loss.backward()
             optim.step()
-    
+
         running_loss += loss.item()
-        #running_hits += torch.true_divide(torch.sum(pred == labels),len(labels))
+        # running_hits += torch.true_divide(torch.sum(pred == labels),len(labels))
         running_hits += (torch.sum(pred == labels)).item() / batch_size
-    
+
     epoch_loss = running_loss / len(train_loader)
-    epoch_acc  = running_hits / len(train_loader)
+    epoch_acc = running_hits / len(train_loader)
     print("Train Loss: {:.3f}\t Acc: {:.3f}".format(epoch_loss, epoch_acc))
-    
+
     running_loss, running_hits = 0.0, 0.0
     for images, labels in tqdm(valid_loader):
         images = images.to(device)
@@ -133,13 +152,13 @@ for i in range(1, n_epochs+1):
             out = model(images)
             loss = lossf(out, labels)
             _, pred = torch.max(out, 1)
-    
+
         running_loss += loss.item()
-        #running_hits += torch.true_divide(torch.sum(pred == labels),len(labels))
+        # running_hits += torch.true_divide(torch.sum(pred == labels),len(labels))
         running_hits += (torch.sum(pred == labels)).item() / batch_size
-        
+
     epoch_loss = running_loss / len(valid_loader)
-    epoch_acc  = running_hits / len(valid_loader)
+    epoch_acc = running_hits / len(valid_loader)
     print("Valid Loss: {:.3f}\t Acc: {:.3f}".format(epoch_loss, epoch_acc))
 
 torch.save(model, path + "model.pt")
@@ -155,7 +174,7 @@ with torch.set_grad_enabled(False):
         _, pred = torch.max(out, 1)
         predictions.append(pred)
         trues.append(labels)
-        
+
 predictions = torch.cat(predictions).detach().cpu().numpy()
 trues = torch.cat(trues).detach().cpu().numpy()
 print(classification_report(trues, predictions))
