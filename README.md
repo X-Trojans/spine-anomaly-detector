@@ -1,3 +1,3 @@
-# spine-anomaly-detector
+# Self-supervised Detection of Spine Anomalies -- USC CSCI 566 Project
 
-https://www.overleaf.com/project/624355fb27d881bdf5c5df35
+Repository is under construction.
